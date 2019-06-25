@@ -3,6 +3,9 @@ import numpy as np
 from pandas_datareader import data, wb
 import ta as ta
 
+pd.options.display.max_rows = 999
+pd.options.display.max_columns = 999
+pd.options.mode.chained_assignment = None  # default='warn'
 
 def get_data():
     """
@@ -23,17 +26,27 @@ def get_data():
     vix = (data.DataReader('^VIX', 
                            "yahoo", 
                            start='1990-1-02', 
-                           end='2019-6-17')
+                           end='2019-5-31')
            .drop(columns = ['Volume', 'Adj Close']))
   
     gspc = data.DataReader('^GSPC', 
                            "yahoo", 
                            start='1990-1-02',
-                           end='2019-6-17')
+                           end='2019-5-31')
     
     treasury = (pd.read_csv('USTREASURY-YIELD.csv')
                 .sort_values(by = 'Date')
                 .drop(columns=['1 MO', '2 MO', '20 YR']))
+    
+    fred = pd.read_csv('FRED-PERMIT.csv')
+    
+    ism = pd.read_csv('ismvsgdp.csv').drop(index = [0,1])
+    
+    lag = pd.read_csv('USLgI.csv')
+    
+    inv = (pd.read_csv('inversion.csv')
+           [['Date','3m1s_inversion','3m2s_inversion',
+             '2s10s_inversion','2s30s_inversion']])
   
     ############### Wrangling Data #################
     
@@ -55,8 +68,89 @@ def get_data():
     
     df = pd.merge(df, treasury, how='inner', on='Date')
     
-    # Datetime Conversion
-    # df['Date'] = pd.to_datetime(df['Date'], infer_datetime_format= True)
+    # Merge DF with the Inversion Features Engineered by Damerei
+    # Sort and create key for merging
+    inv = inv[inv['Date'] < '2019-06-01'].sort_values(by='Date')
+    inv['Date'] = pd.to_datetime(inv['Date'], infer_datetime_format=True)
+    
+    df = pd.merge(df, inv, how='inner', on='Date')
+    
+    # A new feature is needed to act as a key for the following features
+    df['y/m'] = df['Date'].map(lambda x: x.strftime('%Y-%m'))
+    
+    # Line up the Date column with the new key for the FRED Data
+    fred = fred[fred['Date'] > '1989-12-01'].sort_values(by='Date')
+    fred['Date'] = pd.to_datetime(fred['Date'], infer_datetime_format=True)
+    fred['Date'] =  fred['Date'].map(lambda x: x.strftime('%Y-%m'))
+    
+    # Line up the Date column iwth the new key for the ISM/GDP Data
+    ism = ism[ism['ticker'] > '1989-12-01'].sort_values(by='ticker')
+    ism['ticker'] = pd.to_datetime(ism['ticker'], infer_datetime_format=True)
+    ism['ticker'] =  ism['ticker'].map(lambda x: x.strftime('%Y-%m'))
+    # Add most recent ISM data
+    ism = (ism.append(pd.DataFrame([['2019-04', 52.8, np.nan]
+                                   ,['2019-05', 52.1,np.nan]]
+                                   ,columns=ism.columns))
+           .reset_index()
+           .drop(columns='index'))
+    #Add most recent GDP Value
+    ism['GDP CURY Index'].iloc[351] = 5.0
+    # Fill in Quarterly GDP values
+    ism = ism.fillna(method='ffill').fillna(method='bfill')
+    
+    # Wrangle the date column for the Lagging Index Dataframe
+    lag['Date'] = pd.to_datetime(lag['Date'], format='%b-%y')
+    #Create a pivot point around 2019 to accomodate the 2-digit year format
+    for i in np.arange(len(lag)):
+        if lag['Date'][i].year > 2019:
+            lag['Date'][i] = lag['Date'][i].replace(year=lag['Date'][i].year-100)
+        else:
+            pass
+    # Map to the y/m key format
+    lag['Date'] =  lag['Date'].map(lambda x: x.strftime('%Y-%m'))
+    #Slice the dataframe to relevant time period
+    lag = lag[lag['Date'] > '1989-12']
+    
+
+    # Create New Columns with a single iteration using list comprehension
+    f  = []
+    m  = []
+    g  = []
+    ll = []
+    lg = []
+
+    for i in np.arange(len(df)):
+        # Merge the New Private Housing Units Authorized by Building Permits (FRED)
+        f.append(float(fred.loc[fred['Date'] == df['y/m'][i]]['Value']
+                       .values
+                       .tolist()[0]))
+        
+        # Merge the ISM NAPMPMI Index
+        m.append(float(ism.loc[ism['ticker'] == df['y/m'][i]]['NAPMPMI Index']
+                       .values
+                       .tolist()[0]))
+        
+        # Merge the GDP CURY Index
+        g.append(float(ism.loc[ism['ticker'] == df['y/m'][i]]['GDP CURY Index']
+                       .values
+                       .tolist()[0]))
+        
+            # Merge the Lagging Index Level Column
+        ll.append(float(lag.loc[lag['Date'] == df['y/m'][i]]['Level']
+                        .values
+                        .tolist()[0]))
+        
+        # Merge the Lagging Index Growth Column
+        lg.append(float(lag.loc[lag['Date'] == df['y/m'][i]]['Growth']
+                        .values
+                        .tolist()[0]))
+    
+    df['lag_index_level'] = ll
+    df['lag_index_growth'] = lg
+    df['fred'] = f
+    df['ism'] = m
+    df['gdp_cury'] = g
+    
   
     ############### Momemntum Feature Engineering ################
   
