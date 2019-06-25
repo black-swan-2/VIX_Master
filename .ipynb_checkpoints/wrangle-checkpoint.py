@@ -1,3 +1,9 @@
+import pandas as pd
+import numpy as np
+from pandas_datareader import data, wb
+import ta as ta
+
+
 def get_data():
     """
     Downloads and wrangles data for BlackSwan 2.0 VIX modeling. 
